@@ -431,6 +431,9 @@ def build_plugins(config, namespace, device):
             True,
         )
         plugins.append(ActuatorPlugin(device, "arm_control", "Safe P2P arm control with verified controller switching", schema, device.arm))
+    if on("arm_point"):
+        from arm_move_to_point import ArmMovePointPlugin
+        plugins.append(ArmMovePointPlugin(device, enabled["arm_point"]))
     if on("gripper"):
         schema = _action_schema(
             ["start", "info", "set", "open", "close", "stop"],

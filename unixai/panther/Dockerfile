@@ -1,9 +1,12 @@
 ARG ROS_BASE_IMAGE=bj-warehouse.tencentcloudcr.com/phanthy-motus/ros-base:latest
 ARG ROS_APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/ros2/ubuntu
+ARG UBUNTU_APT_HOST=mirrors.tuna.tsinghua.edu.cn
 
 FROM ${ROS_BASE_IMAGE} AS interface-builder
 ARG ROS_APT_MIRROR
-RUN . /etc/os-release && \
+ARG UBUNTU_APT_HOST
+RUN sed -i "s|mirrors.tencentyun.com|${UBUNTU_APT_HOST}|g" /etc/apt/sources.list && \
+    . /etc/os-release && \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros2-archive-keyring.gpg] ${ROS_APT_MIRROR} ${UBUNTU_CODENAME} main" > /etc/apt/sources.list.d/ros2.list && \
     apt-get update && apt-get install -y --no-install-recommends \
       python3-colcon-common-extensions cmake build-essential ros-humble-sensor-msgs && \
@@ -15,10 +18,13 @@ RUN . /opt/ros/humble/setup.sh && colcon build --packages-select unix_msgs audio
 
 FROM ${ROS_BASE_IMAGE}
 ARG ROS_APT_MIRROR
-RUN . /etc/os-release && \
+ARG UBUNTU_APT_HOST
+RUN sed -i "s|mirrors.tencentyun.com|${UBUNTU_APT_HOST}|g" /etc/apt/sources.list && \
+    . /etc/os-release && \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros2-archive-keyring.gpg] ${ROS_APT_MIRROR} ${UBUNTU_CODENAME} main" > /etc/apt/sources.list.d/ros2.list && \
     apt-get update && apt-get install -y --no-install-recommends \
       python3-yaml \
+      python3-venv \
       systemd \
       util-linux \
       pulseaudio-utils \
@@ -46,6 +52,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       python3-numpy python3-opencv && \
     rm -rf /var/lib/apt/lists/*
 
+# The IK planner is isolated from the driver runtime so pinocchio's NumPy
+# cannot perturb the ROS/OpenCV ABI. The card invokes this interpreter only for
+# short-lived FK/IK subprocesses.
+RUN python3 -m venv /opt/panther-pink && \
+    /opt/panther-pink/bin/pip install --no-cache-dir \
+      --index-url https://mirrors.aliyun.com/pypi/simple/ \
+      pin-pink==4.0.0 daqp==0.11.2 && \
+    rm -rf /root/.cache/pip
+
 # Runtime dependencies deliberately come from Ubuntu/ROS apt packages. This
 # avoids duplicate pip NumPy/OpenCV wheels and keeps their ABI aligned with ROS.
 # nav-msgs is required for the /odom Odometry subscription; removing the
@@ -55,8 +70,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=interface-builder /panther_ws/install /panther_ws/install
 WORKDIR /work
-COPY common/ /work/common/
-COPY main.py device.py plugins.py contracts.py core_bridge.py camera.py stereo_camera.py audio.py controlled_spatial.py spatial_map.py spatial_inputs.py base_servo.py config.yaml driver.yaml /work/
+COPY --from=common / /work/common/
+COPY main.py device.py plugins.py contracts.py core_bridge.py camera.py stereo_camera.py audio.py controlled_spatial.py spatial_map.py spatial_inputs.py base_servo.py arm_ik.py arm_move_to_point.py config.yaml driver.yaml /work/
 COPY resource/panther.urdf /work/resource/panther.urdf
 COPY resource/cyclonedds-muzzle.xml /work/resource/cyclonedds-muzzle.xml
 COPY entrypoint.sh /work/entrypoint.sh
@@ -68,4 +83,3 @@ ENV PYTHONUNBUFFERED=1
 ENV RCUTILS_COLORIZED_OUTPUT=0
 EXPOSE 15792
 CMD ["/work/entrypoint.sh"]
-
