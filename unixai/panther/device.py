@@ -175,6 +175,7 @@ class PantherDevice:
         self._controller_query_lock = threading.Lock()
         self._arm_lock = threading.RLock()
         self._arm_active = None
+        self._arm_owner = None
         self._head_lock = threading.RLock()
         self._head_active = None
         self._closed = False
@@ -1218,6 +1219,17 @@ class PantherDevice:
         if not response.ok:
             raise RuntimeError("controller manager rejected arm mode switch")
 
+    def reserve_arm(self, owner: object) -> None:
+        with self._arm_lock:
+            if self._arm_owner is not None or self._arm_active is not None:
+                raise RuntimeError("Panther arm is busy; stop the active arm card first")
+            self._arm_owner = owner
+
+    def release_arm(self, owner: object) -> None:
+        with self._arm_lock:
+            if self._arm_owner is owner:
+                self._arm_owner = None
+
     def arm(self, args: dict) -> dict:
         action = args.get("action", "move")
         if action in ("start", "info"):
@@ -1243,6 +1255,9 @@ class PantherDevice:
             return self._stop_arm("cancelled_by_request", wait_s=10.0)
         if action not in ("move", "move_separate", "home"):
             raise ValueError(f"unsupported arm_control action: {action}")
+        with self._arm_lock:
+            if self._arm_owner is not None:
+                raise RuntimeError("Panther arm is reserved by arm_move_to_point")
         self._ensure_motion_ready()
         cfg = self._cfg["plugins"]["arm_control"]
         max_duration = float(cfg["max_duration_s"])
@@ -1348,6 +1363,8 @@ class PantherDevice:
         with self._arm_lock:
             if self._arm_active:
                 raise RuntimeError("an arm move is already active; call stop first")
+            if self._arm_owner is not None:
+                raise RuntimeError("Panther arm is reserved by arm_move_to_point")
             action_id = str(args.get("action_id") or f"panther_arm_{uuid4().hex[:12]}")
             active = {"action_id": action_id, "action": action, "side": side,
                       "duration_s": duration, "stop": threading.Event(), "handles": {},
@@ -1691,4 +1708,3 @@ class PantherDevice:
         if action == "info":
             return self._camera.info(kind)
         raise ValueError(f"unsupported camera action: {action}")
-
